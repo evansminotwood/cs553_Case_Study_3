@@ -1,0 +1,15 @@
+secrets.env
+*.env
+!config.env
+!secrets.env.example
+report.md
+reports/
+*.pdf
+tmp/
+__pycache__/
+.pytest_cache/
+venv/
+.venv/
+*_key
+*_key.pub
+mykey*

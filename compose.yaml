@@ -1,0 +1,114 @@
+# Started by run_stack.sh, which derives the host ports from PORT_BASE in config.env.
+version: "3.9"
+
+x-product: &product
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://localhost:7860/"]
+    interval: 30s
+    timeout: 5s
+    start_period: 300s
+    retries: 3
+
+services:
+  api:
+    <<: *product
+    build: { context: ., args: { PRODUCT: api } }
+    image: ${GROUP}-api:latest
+    container_name: ${GROUP}-api
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      GRADIO_ROOT_PATH: /api
+    ports:
+      - "${API_UI_PORT}:7860"
+      - "${API_METRICS_PORT}:8000"
+      - "${API_NODE_PORT}:9100"
+
+  local:
+    <<: *product
+    build: { context: ., args: { PRODUCT: local } }
+    image: ${GROUP}-local:latest
+    container_name: ${GROUP}-local
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      GRADIO_ROOT_PATH: /local
+    ports:
+      - "${LOCAL_UI_PORT}:7860"
+      - "${LOCAL_METRICS_PORT}:8000"
+      - "${LOCAL_NODE_PORT}:9100"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ${GROUP}-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    depends_on: [api, local]
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ${GROUP}-grafana
+    restart: unless-stopped
+    environment:
+      PROMETHEUS_URL: http://prometheus:9090
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/blackjack.json
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    depends_on: [prometheus]
+
+  gateway:
+    image: nginx:1.27-alpine
+    container_name: ${GROUP}-gateway
+    restart: unless-stopped
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${GATEWAY_PORT}:80"
+    depends_on: [api, local, grafana]
+
+  ngrok:
+    profiles: [ngrok]
+    image: ngrok/ngrok:latest
+    container_name: ${GROUP}-tunnel
+    restart: unless-stopped
+    command: start --all --config /etc/ngrok.yml
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    volumes:
+      - ./ngrok/ngrok.yml:/etc/ngrok.yml:ro
+    ports:
+      - "127.0.0.1:${NGROK_INSPECT_PORT}:4040"
+    depends_on: [gateway]
+
+  cloudflared:
+    profiles: [cloudflared]
+    image: cloudflare/cloudflared:latest
+    container_name: ${GROUP}-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://gateway:80
+    depends_on: [gateway]
+
+networks:
+  default:
+    name: ${GROUP}-net
+
+volumes:
+  prometheus-data:
+  grafana-data:

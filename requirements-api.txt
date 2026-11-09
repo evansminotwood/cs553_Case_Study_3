@@ -1,0 +1,3 @@
+gradio[oauth]==6.5.1
+huggingface_hub>=0.34,<1
+prometheus-client>=0.20
